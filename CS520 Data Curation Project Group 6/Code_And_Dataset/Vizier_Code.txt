@@ -1,0 +1,212 @@
+import re
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
+# Need to rename Weight to Weight_KG
+# Need to rename Height to Height_cm
+# Need to rename Value to Value_Thousand_Euros
+# Need to rename Wage to Wage_Thousand_Euros
+# Need to rename Release_Clause to Release_Clause_Thousand_Euros
+# Need to rename _OVA to Over_All_Rating
+
+# renameColumns({ 'Joined': 'contractStartDate'})
+# renameColumns({ 'Loan Date End': 'contractEndDate'})
+# add column ["OnLoan"] -> insert column at position 24
+
+# Get read-only pandas dataframe object for dataset with given name.
+df = vizierdb.get_dataset('fifa')
+
+
+'''
+@name : weight()
+@author : Suraj Nammi (snammi@hawk.iit.edu)
+@purpose : To convert the weight values to a standardized format.
+        Convert all values to kgs (LBs to KGs)
+@param : value - value of a row cell that needs to be converted
+@return : updated value
+'''
+def weight(x):
+    nu = int (re.findall('\d+', x )[0])
+    strr = re.findall("[a-zA-Z]+", x)
+    if strr[0] == 'lbs':
+        result = nu * 0.453
+        result = round(result)
+        result = int(result)
+    else:
+        result = nu
+    return result
+
+
+'''
+@name : height()
+@author : Shubham Singh (ssingh127@hawk.iit.edu)
+@purpose : To convert the height values to a standardized format.
+        Convert all values to cms (Feet and Inches to CMs)
+@param : value - value of a row cell that needs to be converted
+@return : updated value
+'''
+def height(x):
+    if "'" in x:
+        feet = x.split("'")[0]
+        inch = (x.split("'")[1]).split('"')[0]
+        result = float(feet + "."  + inch) * 30.48
+    else:   # when height is in cms
+        result = float(re.findall('\d+', x )[0])
+    return result
+
+
+'''
+@name : cur()
+@author : Suraj Nammi (snammi@hawk.iit.edu)
+@purpose : To convert the currency values to a standardized format.
+        Convert all values to thousands (M to K -> Millions to Thousand) Euros
+@param : value - value of a row cell that needs to be converted
+@return : updated value
+'''
+def cur(x):
+    x = str(x).replace('€','')  #removing Euro Sign
+    whole = str (re.findall('\d+', x )[0])
+    decimal = str (re.findall('\d+\.?(\d*)?', x )[0])
+    nu = float(whole + "." + decimal) 
+    
+    strr = re.findall("[a-zA-Z]+", x)
+    
+    if len(strr) != 0 and 'M' == strr[0] :
+        result = nu * 1000
+        result = float(result)
+    else:
+        result = nu
+    return result 
+
+
+'''
+@name : getYearFrom()
+@author : Shubham Singh (ssingh127@hawk.iit.edu)
+@purpose : To retrieve an year value from date column in the dataframe object
+           Expected Format of the Date column = 29-Jan-2020 —> (dd-mon-yyyy) —> ('%d-%b-%Y')
+@param : date - Date value of a row cell 
+@return : year value
+'''
+def getYearFrom(date):
+    date = datetime.strptime(date, '%d-%b-%Y').date()
+    return date.year
+
+
+'''
+@name : modifyDateFormat()
+@author : Shubham Singh (ssingh127@hawk.iit.edu)
+@purpose : To modify date format from '%d-%b-%y' to '%d-%b-%Y'
+           Example : 29-Jan-20 will become 29-Jan-2020
+@param : date - Date value of a row cell 
+@return : updated value
+'''
+def modifyDateFormat(date):
+    date = datetime.strptime(date, '%d-%b-%y').date()
+    date = date.strftime('%d-%b-%Y')
+    return date
+
+
+'''
+@name : modifyContractLoanRelation()
+@author : Purva Lila (plila1@hawk.iit.edu)
+@purpose : Some columns such as (Contract, Joined, Loan Date End) were linked together and had variety of values.
+           Due to the varied values there were some anomalies caused in the data.
+           Bringing data to one standard format is done by modifyContractLoanRelation() method.
+
+--------------------------------- Original Data --------------------------------- 
+Contract	              Joined	       Loan Date End
+2020 ~ 2025	              29-Jan-20	     NaN
+Jun 30, 2023 On Loan	  9-Sep-20	     30-Jun-23
+Free 	                  1-Jan-11
+
+--------------------------------- Resultant Data --------------------------------- 
+Contract          contractStartDate      contractEndDate     OnLoan
+2020 ~ 2025       29-Jan-2020            29-Jan-2025         NO
+2020 ~ 2023       9-Sep-2020             30-Jun-2023         YES
+2011 ~ 9999 	  1-Jan-2011	         31-Dec-9999         FREE
+
+
+--------------------------------- Operations Performed --------------------------------- 
+# Contract —> startYear ~ endYear —> value calculation for "On Loan" entries 
+# Joined —> renamed to contractStartDate —> No change in values
+# Loan Date End —> renamed to contractEndDate  —> value calculation for without "On Loan" entries 
+# onLoan —> New column added —> values = (YES / NO / FREE)
+
+'''
+def modifyContractLoanRelation(row): 
+    # for row in df.rows:
+    x = row.get_value('Contract')
+    
+    joinDate = row.get_value('contractStartDate')
+    joinDate = modifyDateFormat(joinDate)
+    row.set_value('contractStartDate', joinDate)
+        
+    if " ~ " in x:
+        ''' Add number of years from contract in startDate to get endDate '''
+        arr = x.split(" ~ ")
+        joinDate = datetime.strptime(joinDate, '%d-%b-%Y').date()
+        endDate = joinDate +  relativedelta(years= int(arr[1]) - int(arr[0]))
+        endDate = endDate.strftime('%d-%b-%Y')
+
+        row.set_value('contractEndDate', endDate)
+        row.set_value('OnLoan', 'NO')
+        
+    elif 'On Loan' in x:
+            ''' Extract years from both contractStartDate and contractEndDate to fill in Contract Field '''
+            endDate = row.get_value('contractEndDate')
+            endDate = modifyDateFormat(endDate)
+            row.set_value('contractEndDate', endDate)
+            
+            startYear = getYearFrom(joinDate)
+            endYear = getYearFrom(endDate)
+            row.set_value('Contract', str(startYear) + " ~ " + str(endYear))
+            row.set_value('OnLoan', 'YES')
+
+    elif 'Free' in x: 
+        endDate = datetime.strptime('31-Dec-9999', '%d-%b-%Y').date()
+        endDate = endDate.strftime('%d-%b-%Y')
+        row.set_value('contractEndDate', endDate)
+        row.set_value('OnLoan', 'FREE')
+        
+        ''' Extract years from both contractStartDate and contractEndDate to fill in Contract Field '''
+        startYear = getYearFrom(joinDate)
+        endYear = getYearFrom(endDate)
+        row.set_value('Contract', str(startYear) + " ~ " + str(endYear))
+
+    else:
+        ''' If all kinds of expected values doesn't exists, just assign NULL '''
+        row.set_value('contract', NULL)
+        row.set_value('contractStartDate', NULL)
+        row.set_value('contractEndDate', NULL)
+        row.set_value('OnLoan', NULL)
+
+
+'''
+@author : Purva Lila (plila1@hawk.iit.edu)
+@purpose : CALLING OF THE FUNCTIONS AND EXECUTION
+'''
+for row in df.rows:
+    val = row.get_value('Value_Thousand_Euros')
+    v = cur(val)
+    row.set_value('Value_Thousand_Euros', v)
+    
+    wag = row.get_value('Wage_Thousand_Euros')
+    w = cur(wag)
+    row.set_value('Wage_Thousand_Euros', w)
+    
+    release = row.get_value('Release_Clause_Thousand_Euros')
+    r = cur(release)
+    row.set_value('Release_Clause_Thousand_Euros', r)
+    
+    ht = row.get_value('Height_cm')
+    h = height(ht) 
+    row.set_value('Height_cm', h)
+    
+    wt = row.get_value('Weight_KG') 
+    w = weight(wt)
+    row.set_value('Weight_KG', w)
+    
+    modifyContractLoanRelation(row)
+    
+df.show()
+
